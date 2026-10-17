@@ -1,5 +1,5 @@
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Html, Stars } from "@react-three/drei";
+import { Stars } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 
@@ -74,14 +74,23 @@ function Planet({ p, onEnter }: { p: PlanetDef; onEnter: (n: string) => void }) 
           </mesh>
         </group>
       )}
-      <Html position={[0, 0, p.r + 2.2]} center style={{ pointerEvents: "none" }}>
-        <div className="flex flex-col items-center gap-1 whitespace-nowrap">
-          <span className="h-8 w-8 rounded-full border-2 border-foreground/60 bg-space/70" />
-          <span className="font-display text-xs tracking-widest text-foreground text-glow">{p.name}</span>
-        </div>
-      </Html>
     </group>
   );
+}
+
+function LabelProjector({ els }: { els: React.MutableRefObject<(HTMLDivElement | null)[]> }) {
+  const { camera, size } = useThree();
+  const v = useMemo(() => new THREE.Vector3(), []);
+  useFrame(() => {
+    PLANETS.forEach((p, i) => {
+      const el = els.current[i];
+      if (!el) return;
+      v.set(p.x, 0, p.r + 2.2).project(camera);
+      el.style.transform = `translate(-50%,-50%) translate(${((v.x + 1) / 2) * size.width}px, ${((1 - v.y) / 2) * size.height}px)`;
+      el.style.opacity = v.z < 1 ? "1" : "0";
+    });
+  });
+  return null;
 }
 
 function Orbits() {
@@ -241,6 +250,7 @@ function Ship({ keys, onMove, onEnter, rocks, onHit }: { keys: React.MutableRefO
 export default function Galaxy3D({ onEnter, onGameOver }: { onEnter: (n: string) => void; onGameOver: () => void }) {
   const keys = useRef(new Set<Dir>());
   const rocks = useMemo(makeRocks, []);
+  const labelEls = useRef<(HTMLDivElement | null)[]>([]);
   const [health, setHealth] = useState(100);
   const [flashHit, setFlashHit] = useState(false);
   const onHit = () => {
@@ -281,9 +291,16 @@ export default function Galaxy3D({ onEnter, onGameOver }: { onEnter: (n: string)
         <Orbits />
         {PLANETS.map((p) => <Planet key={p.name} p={p} onEnter={onEnter} />)}
         <Asteroids rocks={rocks} />
+        <LabelProjector els={labelEls} />
         <Ship keys={keys} onMove={(x, z) => setPos({ x, z })} onEnter={onEnter} rocks={rocks} onHit={onHit} />
       </Canvas>
 
+      {PLANETS.map((p, i) => (
+        <div key={p.name} ref={(el) => { labelEls.current[i] = el; }} className="pointer-events-none absolute left-0 top-0 flex flex-col items-center gap-1 whitespace-nowrap">
+          <span className="h-8 w-8 rounded-full border-2 border-foreground/60 bg-space/70" />
+          <span className="font-display text-xs tracking-widest text-foreground text-glow">{p.name}</span>
+        </div>
+      ))}
       {flashHit && <div className="pointer-events-none absolute inset-0 bg-destructive/30" />}
       <div className="neon-box absolute left-6 top-6 w-48 rounded-xl border border-neon-cyan/50 bg-space/70 p-3 backdrop-blur">
         <div className="mb-1 flex justify-between font-display text-[10px] tracking-widest text-neon-cyan"><span>HULL</span><span>{health}%</span></div>
