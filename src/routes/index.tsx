@@ -82,7 +82,7 @@ function Index() {
           </button>
         </div>
       )}
-      {stage === "galaxy" && <Galaxy3D onEnter={enter} />}
+      {stage === "galaxy" && <Galaxy3D onEnter={enter} onGameOver={() => setStage("login")} />}
       {stage === "planet" && (
         <div className="flex h-full flex-col items-center bg-flash pt-16 text-flash-foreground">
           <h1 className="font-display text-4xl font-bold">Welcome to {planet}</h1>
