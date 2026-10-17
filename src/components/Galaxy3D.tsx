@@ -74,7 +74,7 @@ function Planet({ p, onEnter }: { p: PlanetDef; onEnter: (n: string) => void }) 
           </mesh>
         </group>
       )}
-      <Html position={[0, -p.r - 1.4, 0]} center style={{ pointerEvents: "none" }}>
+      <Html position={[0, 0, p.r + 2.2]} center style={{ pointerEvents: "none" }}>
         <div className="flex flex-col items-center gap-1 whitespace-nowrap">
           <span className="h-8 w-8 rounded-full border-2 border-foreground/60 bg-space/70" />
           <span className="font-display text-xs tracking-widest text-foreground text-glow">{p.name}</span>
