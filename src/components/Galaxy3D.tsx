@@ -144,8 +144,52 @@ function MilkyWay() {
   );
 }
 
-function Ship({ keys, onMove, onEnter }: { keys: React.MutableRefObject<Set<Dir>>; onMove: (x: number, z: number) => void; onEnter: (n: string) => void }) {
+type Rock = { x: number; z: number; r: number; vx: number; vz: number; orbit: number; ang: number; spin: number };
+
+function makeRocks(): Rock[] {
+  const rocks: Rock[] = [];
+  for (let i = 0; i < 70; i++) {
+    const orbit = 46 + (Math.random() - 0.5) * 5;
+    rocks.push({ x: 0, z: 0, r: 0.35 + Math.random() * 0.7, vx: 0, vz: 0, orbit, ang: Math.random() * Math.PI * 2, spin: 0.02 + Math.random() * 0.04 });
+  }
+  for (let i = 0; i < 30; i++) {
+    const a = Math.random() * Math.PI * 2, d = 10 + Math.random() * 55;
+    rocks.push({ x: Math.cos(a) * d, z: Math.sin(a) * d, r: 0.4 + Math.random() * 0.9, vx: (Math.random() - 0.5) * 3, vz: (Math.random() - 0.5) * 3, orbit: 0, ang: 0, spin: 0 });
+  }
+  return rocks;
+}
+
+function Asteroids({ rocks }: { rocks: Rock[] }) {
+  const refs = useRef<(THREE.Mesh | null)[]>([]);
+  const tex = useMemo(() => makeTexture("#6b6058", "#3a332e"), []);
+  useFrame((_, raw) => {
+    const dt = Math.min(raw, 0.05);
+    rocks.forEach((k, i) => {
+      if (k.orbit) { k.ang += k.spin * dt; k.x = Math.cos(k.ang) * k.orbit; k.z = Math.sin(k.ang) * k.orbit; }
+      else {
+        k.x += k.vx * dt; k.z += k.vz * dt;
+        if (Math.abs(k.x) > WORLD) k.vx *= -1;
+        if (Math.abs(k.z) > WORLD) k.vz *= -1;
+      }
+      const m = refs.current[i];
+      if (m) { m.position.set(k.x, 0, k.z); m.rotation.x += dt; m.rotation.y += dt * 0.7; }
+    });
+  });
+  return (
+    <>
+      {rocks.map((k, i) => (
+        <mesh key={i} ref={(m) => { refs.current[i] = m; }} scale={[k.r, k.r * 0.8, k.r * 1.1]}>
+          <dodecahedronGeometry args={[1, 0]} />
+          <meshStandardMaterial map={tex} roughness={1} flatShading />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
+function Ship({ keys, onMove, onEnter, rocks, onHit }: { keys: React.MutableRefObject<Set<Dir>>; onMove: (x: number, z: number) => void; onEnter: (n: string) => void; rocks: Rock[]; onHit: () => void }) {
   const ref = useRef<THREE.Group>(null);
+  const cool = useRef(0);
   const { camera } = useThree();
   const hit = useRef(false);
   useFrame((_, raw) => {
@@ -162,6 +206,14 @@ function Ship({ keys, onMove, onEnter }: { keys: React.MutableRefObject<Set<Dir>
       onMove(s.position.x, s.position.z);
       const p = PLANETS.find((p) => Math.hypot(p.x - s.position.x, s.position.z) < p.r + 0.6);
       if (p && !hit.current) { hit.current = true; onEnter(p.name); }
+    }
+    cool.current -= dt;
+    const rk = rocks.find((k) => Math.hypot(k.x - s.position.x, k.z - s.position.z) < k.r + 0.7);
+    if (rk && cool.current <= 0) {
+      cool.current = 1;
+      const ang = Math.atan2(s.position.z - rk.z, s.position.x - rk.x);
+      s.position.x += Math.cos(ang) * 2.5; s.position.z += Math.sin(ang) * 2.5;
+      onHit();
     }
     const target = new THREE.Vector3(s.position.x, 22, s.position.z + 18);
     camera.position.lerp(target, 1 - Math.exp(-4 * dt));
@@ -186,8 +238,20 @@ function Ship({ keys, onMove, onEnter }: { keys: React.MutableRefObject<Set<Dir>
   );
 }
 
-export default function Galaxy3D({ onEnter }: { onEnter: (n: string) => void }) {
+export default function Galaxy3D({ onEnter, onGameOver }: { onEnter: (n: string) => void; onGameOver: () => void }) {
   const keys = useRef(new Set<Dir>());
+  const rocks = useMemo(makeRocks, []);
+  const [health, setHealth] = useState(100);
+  const [flashHit, setFlashHit] = useState(false);
+  const onHit = () => {
+    setFlashHit(true);
+    setTimeout(() => setFlashHit(false), 250);
+    setHealth((h) => {
+      const n = Math.max(0, h - 10);
+      if (n === 0) setTimeout(onGameOver, 600);
+      return n;
+    });
+  };
   const [pos, setPos] = useState({ x: 31, z: 14 });
 
   useEffect(() => {
@@ -216,9 +280,18 @@ export default function Galaxy3D({ onEnter }: { onEnter: (n: string) => void }) 
         <Sun />
         <Orbits />
         {PLANETS.map((p) => <Planet key={p.name} p={p} onEnter={onEnter} />)}
-        <Ship keys={keys} onMove={(x, z) => setPos({ x, z })} onEnter={onEnter} />
+        <Asteroids rocks={rocks} />
+        <Ship keys={keys} onMove={(x, z) => setPos({ x, z })} onEnter={onEnter} rocks={rocks} onHit={onHit} />
       </Canvas>
 
+      {flashHit && <div className="pointer-events-none absolute inset-0 bg-destructive/30" />}
+      <div className="neon-box absolute left-6 top-6 w-48 rounded-xl border border-neon-cyan/50 bg-space/70 p-3 backdrop-blur">
+        <div className="mb-1 flex justify-between font-display text-[10px] tracking-widest text-neon-cyan"><span>HULL</span><span>{health}%</span></div>
+        <div className="h-2 overflow-hidden rounded-full bg-muted">
+          <div className={`h-full transition-all duration-300 ${health > 30 ? "bg-neon-cyan" : "bg-destructive"}`} style={{ width: `${health}%` }} />
+        </div>
+      </div>
+      {health === 0 && <div className="pointer-events-none absolute inset-0 flex items-center justify-center font-display text-4xl font-black tracking-widest text-destructive">SHIP DESTROYED</div>}
       <p className="pointer-events-none absolute left-1/2 top-6 -translate-x-1/2 font-display text-xs tracking-[0.3em] text-neon-cyan/80">J-UNIVERSE · FLY INTO A PLANET</p>
 
       <div className="absolute bottom-6 left-6 grid grid-cols-3 gap-2">
