@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useMemo, useState } from "react";
 import Galaxy3D from "@/components/Galaxy3D";
+import JGit from "@/components/JGit";
 
 export const Route = createFileRoute("/")({
   ssr: false,
@@ -83,13 +84,20 @@ function Index() {
         </div>
       )}
       {stage === "galaxy" && <Galaxy3D onEnter={enter} onGameOver={() => setStage("login")} />}
-      {stage === "planet" && (
+      {stage === "planet" && (planet === "J-CodeHub" ? (
+        <JGit />
+      ) : (
         <div className="flex h-full flex-col items-center bg-flash pt-16 text-flash-foreground">
           <h1 className="font-display text-4xl font-bold">Welcome to {planet}</h1>
-          <button onClick={() => setStage("galaxy")} className="mt-8 rounded-full border border-flash-foreground/30 px-6 py-3 font-display text-sm tracking-wider transition hover:bg-flash-foreground hover:text-flash">
-            ← Back to Galaxy
-          </button>
         </div>
+      ))}
+      {stage === "planet" && (
+        <button
+          onClick={() => setStage("galaxy")}
+          className="fixed bottom-6 right-6 z-40 rounded-full border border-neon-cyan/60 bg-space/80 px-6 py-3 font-display text-sm tracking-wider text-neon-cyan backdrop-blur transition hover:bg-neon-blue/30"
+        >
+          ← Back to Galaxy
+        </button>
       )}
       {flash && <div className="animate-flash pointer-events-none fixed inset-0 z-50 bg-flash" />}
     </main>
