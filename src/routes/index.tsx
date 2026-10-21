@@ -1,7 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Galaxy3D from "@/components/Galaxy3D";
 import JGit from "@/components/JGit";
+import AuthCard from "@/components/AuthCard";
+import { supabase } from "@/lib/supabase";
 
 export const Route = createFileRoute("/")({
   ssr: false,
@@ -67,20 +69,23 @@ function Index() {
     }, 700);
   };
 
+  const stageRef = useRef(stage);
+  stageRef.current = stage;
+  useEffect(() => {
+    const go = () => { if (stageRef.current === "login") login(); };
+    supabase.auth.getSession().then(({ data }) => { if (data.session) go(); });
+    const { data } = supabase.auth.onAuthStateChange((e, sess) => { if (e === "SIGNED_IN" && sess) go(); });
+    return () => data.subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <main className="dark relative h-screen w-full overflow-hidden font-sans text-foreground">
       {stage === "login" && (
         <div className={`space-bg relative flex h-full flex-col items-center justify-center gap-10 transition-all duration-700 ${fade ? "scale-110 opacity-0" : ""}`}>
           <Stars />
           <h1 className="animate-rise relative font-display text-6xl font-black tracking-widest text-neon-cyan text-glow md:text-8xl">J-UniVerse</h1>
-          <button
-            onClick={login}
-            className="animate-rise neon-box relative flex items-center gap-3 rounded-full border border-neon-cyan/60 bg-space/60 px-8 py-4 font-display text-sm tracking-wider backdrop-blur transition hover:scale-105 hover:bg-neon-blue/20"
-            style={{ animationDelay: ".3s" }}
-          >
-            <svg viewBox="0 0 48 48" className="h-6 w-6"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.8 1.1 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3 0 5.8 1.1 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
-            Login with Google
-          </button>
+          <AuthCard />
         </div>
       )}
       {stage === "galaxy" && <Galaxy3D onEnter={enter} onGameOver={() => setStage("login")} />}

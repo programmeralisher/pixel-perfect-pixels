@@ -1,31 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
-import { File as FileIcon, Folder, GitBranch, History, KeyRound, Lock, Plus, Search } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { createGitToken } from "@/lib/forgejo.functions";
+import { BASE, api, ago, box, btn, btnGreen, enc, input, raw, type Repo } from "./jgit-shared";
+import JGitPulls from "./JGitPulls";
+import JGitBranches from "./JGitBranches";
+import JGitGuide from "./JGitGuide";
+import { Profile, RepoAbout } from "./JGitShowcase";
 
-// Forgejo server URL. Change it in .env (VITE_FORGEJO_URL) when you deploy; no code change needed.
-const BASE = ((import.meta as any).env?.VITE_FORGEJO_URL as string | undefined) ?? "http://localhost:3000";
+// Tiny inline icons (no icon-library import, keeps the dev server fast)
+type IconProps = { size?: number; className?: string; fill?: string };
+const mk = (d: string) => ({ size = 16, className, fill = "none" }: IconProps) => (
+  <svg viewBox="0 0 24 24" width={size} height={size} className={className} fill={fill} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={d} /></svg>
+);
+const FileIcon = mk("M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5");
+const Folder = mk("M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z");
+const GitBranch = mk("M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9c0 6-12 3-12 6");
+const History = mk("M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2");
+const KeyRound = mk("M2 18v3h3l9-9a5 5 0 1 0-3-3zM16.5 7.5h.01");
+const Lock = mk("M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4");
+const Plus = mk("M12 5v14M5 12h14");
+const Search = mk("M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3");
 
-type Repo = { name: string; full_name: string; description: string; private: boolean; default_branch: string; updated_at: string; owner: { login: string } };
 type Entry = { name: string; path: string; type: "file" | "dir" | "symlink" | "submodule"; size: number };
 type Commit = { sha: string; commit: { message: string; author: { name: string; date: string } } };
-
-const enc = (p: string) => p.split("/").map(encodeURIComponent).join("/");
-
-async function api<T>(path: string, token: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}/api/v1${path}`, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `token ${token}` } : {}), ...init?.headers },
-  });
-  if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 180)}`);
-  return (res.status === 204 ? null : await res.json()) as T;
-}
-
-async function raw(o: string, r: string, path: string, ref: string, token: string) {
-  const res = await fetch(`${BASE}/api/v1/repos/${o}/${r}/raw/${enc(path)}?ref=${encodeURIComponent(ref)}`, {
-    headers: token ? { Authorization: `token ${token}` } : {},
-  });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return res.text();
-}
 
 const toB64 = (s: string) => {
   const bytes = new TextEncoder().encode(s);
@@ -34,54 +31,69 @@ const toB64 = (s: string) => {
   return btoa(bin);
 };
 
-function ago(iso: string) {
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)} hours ago`;
-  if (s < 2592000) return `${Math.floor(s / 86400)} days ago`;
-  return new Date(iso).toLocaleDateString();
-}
-
-// Shared GitHub-dark style tokens
-const box = "rounded-md border border-[#30363d] bg-[#0d1117]";
-const btn = "inline-flex items-center gap-1.5 rounded-md border border-[#363b42] bg-[#21262d] px-3 py-1 text-sm font-medium text-[#e6edf3] hover:bg-[#30363d]";
-const btnGreen = "inline-flex items-center gap-1.5 rounded-md border border-[#2ea043] bg-[#238636] px-3 py-1 text-sm font-medium text-white hover:bg-[#2ea043] disabled:opacity-50";
-const input = "w-full rounded-md border border-[#30363d] bg-[#0d1117] px-3 py-1.5 text-sm text-[#e6edf3] outline-none placeholder:text-[#6e7681] focus:border-[#2f81f7]";
-
 export default function JGit() {
-  const [token, setToken] = useState(() => (typeof window === "undefined" ? "" : sessionStorage.getItem("jgit-token") ?? ""));
-  const [showToken, setShowToken] = useState(false);
+  const [token, setToken] = useState("");
+  const [email, setEmail] = useState("");
   const [repo, setRepo] = useState<Repo | null>(null);
+  const [profile, setProfile] = useState<string | null>(null);
+  const [gitTok, setGitTok] = useState<{ username: string; token: string } | null>(null);
+  const [gitErr, setGitErr] = useState("");
 
-  const saveToken = (t: string) => {
-    setToken(t);
-    try { sessionStorage.setItem("jgit-token", t); } catch { /* ignore */ }
+  useEffect(() => {
+    const apply = (s: { access_token: string; user: { email?: string } } | null) => {
+      setToken(s?.access_token ?? "");
+      setEmail(s?.user.email ?? "");
+    };
+    supabase.auth.getSession().then(({ data }) => apply(data.session));
+    const { data } = supabase.auth.onAuthStateChange((_e, s) => apply(s));
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  const openMine = async () => {
+    try { const me = await api<{ login: string }>("/user", token); setRepo(null); setProfile(me.login); } catch (e: any) { setGitErr(e.message); }
+  };
+
+  const makeGitToken = async () => {
+    setGitErr("");
+    try { setGitTok(await createGitToken({ data: { token } })); } catch (e: any) { setGitErr(e.message); }
   };
 
   return (
     <div className="fixed inset-0 overflow-auto bg-[#0d1117] pb-24 font-sans text-[#e6edf3]">
       <header className="flex items-center gap-4 border-b border-[#30363d] bg-[#161b22] px-6 py-3">
-        <button onClick={() => setRepo(null)} className="flex items-center gap-2 text-lg font-semibold">
+        <button onClick={() => { setRepo(null); setProfile(null); }} className="flex items-center gap-2 text-lg font-semibold">
           <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" stroke="#2f81f7" strokeWidth="2" strokeLinecap="round"><circle cx="6" cy="5" r="2" /><circle cx="6" cy="19" r="2" /><circle cx="18" cy="9" r="2" /><path d="M6 7v10M18 11c0 4-12 2-12 6" /></svg>
           J-GIT
         </button>
         {repo && <span className="text-sm text-[#8b949e]">/ {repo.full_name}</span>}
         <div className="ml-auto flex items-center gap-2">
-          <span className="text-xs text-[#8b949e]">{token ? "Signed in with token" : "Read-only (public repos)"}</span>
-          <button onClick={() => setShowToken((v) => !v)} className={btn}><KeyRound size={14} /> Token</button>
+          <span className="hidden text-xs text-[#8b949e] sm:inline">{email || "Not signed in (public repos only)"}</span>
+          {token && <button onClick={openMine} className={btn}>My profile</button>}
+          {token && <button onClick={makeGitToken} className={btn}><KeyRound size={14} /> Git token</button>}
+          {token && <button onClick={() => supabase.auth.signOut()} className={btn}>Sign out</button>}
         </div>
       </header>
-      {showToken && (
+      {(gitTok || gitErr) && (
         <div className="mx-auto mt-4 max-w-5xl px-6">
-          <div className={`${box} p-4`}>
-            <p className="mb-2 text-sm text-[#8b949e]">Paste a Forgejo access token (Settings → Applications) to see private repos and push changes. It is kept only for this browser tab.</p>
-            <input type="password" value={token} onChange={(e) => saveToken(e.target.value.trim())} placeholder="Access token" className={input} />
+          <div className={`${box} space-y-2 p-4 text-sm`}>
+            {gitErr ? <p className="text-[#ff7b72]">{gitErr}</p> : gitTok && (
+              <>
+                <p className="text-[#8b949e]">Use this when <code>git push</code> asks for credentials. Copy it now, it is shown only once.</p>
+                <p>Username: <code className="rounded bg-[#161b22] px-2 py-0.5">{gitTok.username}</code></p>
+                <p>Password: <code className="break-all rounded bg-[#161b22] px-2 py-0.5">{gitTok.token}</code></p>
+              </>
+            )}
           </div>
         </div>
       )}
       <main className="mx-auto max-w-5xl px-6 py-6">
-        {repo ? <RepoView repo={repo} token={token} /> : <RepoList token={token} onOpen={setRepo} />}
+        {profile ? (
+          <Profile name={profile} token={token} onOpen={(r) => { setProfile(null); setRepo(r); }} />
+        ) : repo ? (
+          <RepoView repo={repo} token={token} onProfile={(u) => { setRepo(null); setProfile(u); }} />
+        ) : (
+          <RepoList token={token} onOpen={setRepo} />
+        )}
       </main>
     </div>
   );
@@ -94,13 +106,23 @@ function RepoList({ token, onOpen }: { token: string; onOpen: (r: Repo) => void 
   const [name, setName] = useState("");
   const [isPrivate, setIsPrivate] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [orgs, setOrgs] = useState<{ username?: string; name?: string }[]>([]);
+  useEffect(() => {
+    api<{ username?: string; name?: string }[]>("/orgs?limit=50", token).then(setOrgs).catch(() => {});
+  }, [token]);
+
+  const [mode, setMode] = useState<"mine" | "explore">("explore");
+  useEffect(() => { if (token) setMode("mine"); }, [!!token]);
 
   const load = useCallback(() => {
     setErr("");
-    api<{ data: Repo[] }>(`/repos/search?q=${encodeURIComponent(q)}&limit=50&sort=updated&order=desc`, token)
-      .then((r) => setRepos(r.data))
-      .catch((e) => setErr(e.message === "Failed to fetch" ? `Cannot reach ${BASE}. Is Forgejo running and CORS enabled?` : e.message));
-  }, [q, token]);
+    const fail = (e: Error) => setErr(e.message === "Failed to fetch" ? "Cannot reach the J-GIT server. Is Forgejo running and are the server settings (.env.local) set?" : e.message);
+    if (mode === "mine" && token) {
+      api<Repo[]>("/user/repos?limit=50", token).then((l) => setRepos(l.filter((x) => x.full_name.toLowerCase().includes(q.toLowerCase())))).catch(fail);
+    } else {
+      api<{ data: Repo[] }>(`/repos/search?q=${encodeURIComponent(q)}&limit=50&sort=updated&order=desc&is_private=false`, token).then((r) => setRepos(r.data)).catch(fail);
+    }
+  }, [q, token, mode]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -116,6 +138,20 @@ function RepoList({ token, onOpen }: { token: string; onOpen: (r: Repo) => void 
 
   return (
     <>
+      {orgs.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-sm text-[#8b949e]">Organizations:</span>
+          {orgs.map((g) => {
+            const n = g.username ?? g.name ?? "";
+            return <a key={n} href={`${BASE}/${n}`} target="_blank" rel="noreferrer" className="rounded-full border border-[#30363d] px-3 py-0.5 text-sm text-[#2f81f7] hover:bg-[#161b22]">{n}</a>;
+          })}
+        </div>
+      )}
+      <div className="mb-4 flex gap-1 border-b border-[#30363d]">
+        {([["mine", "My repositories"], ["explore", "Explore projects"]] as const).map(([m, label]) => (
+          <button key={m} onClick={() => setMode(m)} className={`-mb-px border-b-2 px-4 py-2 text-sm ${mode === m ? "border-[#f78166] font-semibold" : "border-transparent text-[#8b949e] hover:text-[#e6edf3]"}`}>{label}</button>
+        ))}
+      </div>
       <div className="mb-4 flex items-center gap-3">
         <div className="relative flex-1">
           <Search size={14} className="absolute left-3 top-2.5 text-[#8b949e]" />
@@ -128,7 +164,7 @@ function RepoList({ token, onOpen }: { token: string; onOpen: (r: Repo) => void 
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="repository-name" className={`${input} max-w-xs`} />
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} /> Private</label>
           <button className={btnGreen} disabled={!token} onClick={create}>Create repository</button>
-          {!token && <span className="text-xs text-[#d29922]">Add a token first</span>}
+          {!token && <span className="text-xs text-[#d29922]">Sign in first</span>}
         </div>
       )}
       {err && <p className="mb-4 rounded-md border border-[#f85149]/50 bg-[#f85149]/10 p-3 text-sm text-[#ff7b72]">{err}</p>}
@@ -142,7 +178,7 @@ function RepoList({ token, onOpen }: { token: string; onOpen: (r: Repo) => void 
               {r.private && <Lock size={12} className="text-[#8b949e]" />}
             </div>
             {r.description && <p className="mt-1 text-sm text-[#8b949e]">{r.description}</p>}
-            <p className="mt-2 text-xs text-[#8b949e]">Updated {ago(r.updated_at)}</p>
+            <p className="mt-2 text-xs text-[#8b949e]">★ {r.stars_count ?? 0} · Updated {ago(r.updated_at)}</p>
           </button>
         ))}
       </div>
@@ -150,10 +186,11 @@ function RepoList({ token, onOpen }: { token: string; onOpen: (r: Repo) => void 
   );
 }
 
-function RepoView({ repo, token }: { repo: Repo; token: string }) {
+function RepoView({ repo, token, onProfile }: { repo: Repo; token: string; onProfile: (u: string) => void }) {
   const o = repo.owner.login;
   const r = repo.name;
-  const [tab, setTab] = useState<"code" | "commits">("code");
+  const [tab, setTab] = useState<"code" | "commits" | "branches" | "pulls" | "guide">("code");
+  const [prHead, setPrHead] = useState("");
   const [branches, setBranches] = useState<string[]>([]);
   const [ref, setRef] = useState(repo.default_branch);
   const [path, setPath] = useState("");
@@ -228,17 +265,26 @@ function RepoView({ repo, token }: { repo: Repo; token: string }) {
   return (
     <>
       <div className="mb-4 flex items-center gap-2 text-xl">
-        <span className="text-[#2f81f7]">{o}</span><span className="text-[#8b949e]">/</span><span className="font-semibold text-[#2f81f7]">{r}</span>
+        <button className="text-[#2f81f7] hover:underline" onClick={() => onProfile(o)}>{o}</button><span className="text-[#8b949e]">/</span><span className="font-semibold text-[#2f81f7]">{r}</span>
         <span className="ml-1 rounded-full border border-[#30363d] px-2 text-xs text-[#8b949e]">{repo.private ? "Private" : "Public"}</span>
       </div>
+      <RepoAbout repo={repo} token={token} />
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        {[["Issues", "issues"], ["Pull requests", "pulls"], ["Open in Forgejo", ""]].map(([label, seg]) => (
+          <a key={label} href={`${BASE}/${o}/${r}${seg ? `/${seg}` : ""}`} target="_blank" rel="noreferrer" className={btn}>{label}</a>
+        ))}
+        <code className="ml-auto max-w-full truncate rounded-md border border-[#30363d] bg-[#161b22] px-3 py-1 text-xs text-[#8b949e]">git clone {repo.clone_url ?? `${BASE}/${o}/${r}.git`}</code>
+      </div>
       <div className="mb-4 flex gap-1 border-b border-[#30363d]">
-        {(["code", "commits"] as const).map((t) => (
-          <button key={t} onClick={() => setTab(t)} className={`-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm capitalize ${tab === t ? "border-[#f78166] font-semibold" : "border-transparent text-[#8b949e] hover:text-[#e6edf3]"}`}>
-            {t === "code" ? <FileIcon size={14} /> : <History size={14} />} {t}
+        {(["code", "commits", "branches", "pulls", "guide"] as const).map((t) => (
+          <button key={t} onClick={() => { setTab(t); if (t !== "pulls") setPrHead(""); }} className={`-mb-px flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm capitalize ${tab === t ? "border-[#f78166] font-semibold" : "border-transparent text-[#8b949e] hover:text-[#e6edf3]"}`}>
+            {t === "code" ? <FileIcon size={14} /> : t === "commits" ? <History size={14} /> : t === "branches" ? <GitBranch size={14} /> : null} {t === "pulls" ? "pull requests" : t}
           </button>
         ))}
       </div>
 
+      {(tab === "code" || tab === "commits") && (
+        <>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <select value={ref} onChange={(e) => { setRef(e.target.value); setPath(""); }} className={`${btn} appearance-none pr-6`}>
           {(branches.length ? branches : [ref]).map((b) => <option key={b} value={b}>{b}</option>)}
@@ -250,7 +296,7 @@ function RepoView({ repo, token }: { repo: Repo; token: string }) {
         </div>
       </div>
 
-      {!token && menu && <p className="mb-3 text-xs text-[#d29922]">Add an access token (top right) to create branches or files.</p>}
+      {!token && menu && <p className="mb-3 text-xs text-[#d29922]">Sign in to create branches or files.</p>}
       {menu === "branch" && (
         <div className={`${box} mb-4 flex items-center gap-3 p-4`}>
           <input value={newBranch} onChange={(e) => setNewBranch(e.target.value)} placeholder={`New branch from ${ref}`} className={`${input} max-w-xs`} />
@@ -264,6 +310,8 @@ function RepoView({ repo, token }: { repo: Repo; token: string }) {
           <input value={fMsg} onChange={(e) => setFMsg(e.target.value)} placeholder="Commit message" className={input} />
           <button className={btnGreen} disabled={!token || !fPath.trim()} onClick={createFile}>Commit to {ref}</button>
         </div>
+      )}
+        </>
       )}
       {err && <p className="mb-4 rounded-md border border-[#f85149]/50 bg-[#f85149]/10 p-3 text-sm text-[#ff7b72]">{err}</p>}
 
@@ -319,6 +367,9 @@ function RepoView({ repo, token }: { repo: Repo; token: string }) {
           ))}
         </div>
       )}
+      {tab === "branches" && <JGitBranches repo={repo} token={token} onChanged={loadBranches} onPR={(b) => { setPrHead(b); setTab("pulls"); }} />}
+      {tab === "pulls" && <JGitPulls repo={repo} token={token} branches={branches.length ? branches : [repo.default_branch]} startHead={prHead} />}
+      {tab === "guide" && <JGitGuide repo={repo} />}
     </>
   );
 }

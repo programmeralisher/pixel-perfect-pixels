@@ -1,0 +1,27 @@
+# J-GIT server (Forgejo). Run from this folder:  docker compose up -d
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:15
+    container_name: forgejo
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    volumes:
+      - forgejo-data:/data
+      - ./custom/templates:/data/gitea/templates
+      - ./custom/public:/data/gitea/public
+    environment:
+      - FORGEJO__DEFAULT__APP_NAME=J-GIT
+      # Accounts are created ONLY by the J-GIT server (via the admin API), not on Forgejo's own page.
+      - FORGEJO__service__DISABLE_REGISTRATION=true
+      - FORGEJO__service__DEFAULT_KEEP_EMAIL_PRIVATE=true
+      # Only admins/teachers create organizations (departments, courses).
+      - FORGEJO__service__DEFAULT_ALLOW_CREATE_ORGANIZATION=false
+      # New repos are private by default (assignments are not public).
+      - FORGEJO__repository__DEFAULT_PRIVATE=private
+      - FORGEJO__ui__DEFAULT_THEME=forgejo-dark
+
+volumes:
+  forgejo-data:
+    external: true   # the volume you already created with `docker run`
